@@ -1,0 +1,17 @@
+[global]
+# suppress the "Would you like to receive updates?" prompt
+showWarningOnDirectExecution = false
+
+[server]
+headless = true
+
+[client]
+# keeps the toolbar minimal so the Deploy button is hidden
+toolbarMode = "minimal"
+
+[theme]
+primaryColor        = "#1f6feb"      # clear blue – used for buttons & accents
+backgroundColor     = "#ffffff"      # white page background
+secondaryBackgroundColor = "#f0f4f9" # light blue-grey for sidebar & cards
+textColor           = "#1a1a2e"      # near-black for readable body text
+font                = "sans serif"
