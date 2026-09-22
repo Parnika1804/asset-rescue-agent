@@ -4,8 +4,8 @@
 
 ![Python](https://img.shields.io/badge/Python-3.13-blue)
 ![Streamlit](https://img.shields.io/badge/Streamlit-1.36.0-red)
-![Azure AI Foundry](https://img.shields.io/badge/Azure_AI_Foundry-in_progress-orange)
-![Azure AI Search](https://img.shields.io/badge/Azure_AI_Search-in_progress-orange)
+![Azure AI Foundry](https://img.shields.io/badge/Azure_AI_Foundry-live-brightgreen)
+![Azure AI Search](https://img.shields.io/badge/Azure_AI_Search-live-brightgreen)
 ![SQLite](https://img.shields.io/badge/SQLite-3-lightgrey)
 
 ---
@@ -29,7 +29,7 @@ Universities and large organisations own hundreds of physical assets — laptops
 
 ## Solution Overview
 
-The AI Asset Rescue Agent reads asset records from a SQLite database, scores every asset for repair risk and underuse, and presents findings on a live Streamlit dashboard. A planned Azure AI Foundry agent layer (currently in progress) will allow staff to query assets and policies in natural language and receive proposed actions they can approve or reject with a single click.
+The AI Asset Rescue Agent reads asset records from a SQLite database, scores every asset for repair risk and underuse, and presents findings on a live Streamlit dashboard. An Azure AI Foundry agent layer allows staff to query assets and policies in natural language and receive proposed actions they can approve or reject with a single click. The agent is fully functional and has been tested end-to-end.
 
 ### Key Features
 
@@ -42,9 +42,9 @@ The AI Asset Rescue Agent reads asset records from a SQLite database, scores eve
 | **Input validation** — proposals are blocked for non-existent, Decommissioned or Under Repair assets, and for same-department reallocations | ✅ Complete |
 | **Live dashboard** — KPI cards, top-5 action cards, high-risk table with progress bar, 2×2 chart grid, actions log | ✅ Complete |
 | **Policy documents** — four Markdown policy files covering maintenance, allocation, audit and replacement | ✅ Complete |
-| **Natural-language asset search** via Azure AI Foundry agent | 🔄 In progress |
-| **Policy Q&A with citations** via Azure AI Search RAG index | 🔄 In progress |
-| **Chat tab** — UI designed and wired; agent not yet connected | 🔄 In progress |
+| **Natural-language asset search** via Azure AI Foundry agent | ✅ Complete |
+| **Policy Q&A with citations** via Azure AI Search RAG index | ✅ Complete |
+| **Chat tab** — live, wired to the agent, with working Approve / Reject cards | ✅ Complete |
 
 ---
 
@@ -68,7 +68,7 @@ screenshots/
 *High-risk table — risk score as a progress bar, with downloadable CSV.*
 
 ![Chat tab](screenshots/chat_tab.png)
-*Chat tab — example questions and mock Approve / Reject card (agent not yet connected).*
+*Chat tab — AI Agent Chat with live Approve / Reject card.*
 -->
 
 ---
@@ -79,10 +79,10 @@ screenshots/
 flowchart TD
     A["👤 IT Staff\n(Browser)"] --> B["Streamlit UI\n(app.py)"]
 
-    B --> C{"Azure AI Foundry\nAgent\n🔄 in progress"}
+    B --> C{"Azure AI Foundry\nAgent\n(agent.py)"}
 
-    C --> D["Azure AI Search\nPolicy RAG Index\n🔄 in progress"]
-    C --> E["Python Function Tools\n(tools.py)\nsearch_assets\nget_high_risk_assets\nschedule_maintenance\nreallocate_asset"]
+    C --> D["Azure AI Search\nPolicy RAG Index\n(7 chunks indexed)"]
+    C --> E["Python Function Tools\n(tools.py)\nsearch_assets\nget_high_risk_assets\nget_underused_assets\nschedule_maintenance\nreallocate_asset\nsearch_policy_docs"]
 
     D --> F["Policy Docs\n/docs/*.md"]
     E --> G["SQLite Database\n(data/assets.db)"]
@@ -94,10 +94,6 @@ flowchart TD
 
     G --> K["score_assets()\n(scoring.py)"]
     K --> B
-
-    style C fill:#fff3cd,stroke:#ffc107
-    style D fill:#fff3cd,stroke:#ffc107
-    style H fill:#fff3cd,stroke:#ffc107
 ```
 
 **How it works:**
@@ -105,7 +101,8 @@ flowchart TD
 1. `make_data.py` generates 150 synthetic assets; `db.py` loads them into SQLite with an `assets` table and an `actions_log` table.
 2. `scoring.py` computes a 0–100 repair risk score and an underuse flag for every in-service asset, with a plain-English reason string, using only pandas — no external API call needed.
 3. `app.py` reads scored data and renders the dashboard; the sidebar filters propagate to every KPI, table and chart in real time.
-4. When an action is approved (currently via `execute_action()` in code; future: Approve button in Chat tab), the database is updated and the action is appended to `actions_log` with a local timestamp.
+4. `agent.py` hosts the Azure AI Foundry agent (GPT-4.1-mini) wired to 6 tools: `search_assets`, `get_high_risk_assets`, `get_underused_assets`, `schedule_maintenance`, `reallocate_asset`, and `search_policy_docs` (vector search over the RAG index). The Chat tab in `app.py` calls `run_agent()` directly.
+5. When an action is approved via the Approve button in the Chat tab, `execute_action()` writes to the database and appends to `actions_log` with a local timestamp.
 
 ---
 
@@ -115,13 +112,11 @@ flowchart TD
 
 | Layer | Technology | Purpose |
 |-------|-----------|---------|
-| Agent orchestration | Azure AI Foundry Agent Service | Hosts the conversational agent, manages tool calls and conversation turns |
-| Chat model | GPT-4o (Azure OpenAI) | Understands natural-language queries and decides which tools to call |
-| Embedding model | text-embedding-ada-002 (Azure OpenAI) | Embeds policy documents for semantic search |
-| Knowledge retrieval | Azure AI Search | RAG index over the four policy Markdown files; provides cited answers |
+| Agent orchestration | Azure AI Foundry (AzureOpenAI SDK) | Hosts the conversational agent, manages tool calls and conversation turns |
+| Chat model | GPT-4.1-mini (Azure OpenAI) | Understands natural-language queries and decides which tools to call |
+| Embedding model | text-embedding-ada-002 (Azure OpenAI) | Embeds policy documents and queries for semantic search |
+| Knowledge retrieval | Azure AI Search | RAG index (`policy-index`) over the four policy Markdown files; 7 chunks indexed; provides cited answers |
 | Content safety | Azure AI Content Filters | Screens agent inputs and outputs for harmful content |
-
-> All Azure AI services are **in progress** and not yet connected to the running app.
 
 ### App & Dev Tools
 
@@ -142,13 +137,13 @@ flowchart TD
 
 | Concept | Where it appears in this project |
 |---------|----------------------------------|
-| **Agent with tools** | `tools.py` defines five callable functions (`search_assets`, `get_high_risk_assets`, `schedule_maintenance`, `reallocate_asset`, `execute_action`) that an Azure AI Foundry agent will call to interact with real data |
-| **Retrieval-Augmented Generation (RAG)** | Four policy Markdown documents in `/docs` will be indexed in Azure AI Search; the agent retrieves and cites policy text before answering questions |
-| **Responsible AI — Human oversight** | Every proposed action is presented as an Approve / Reject card; `execute_action()` only writes to the database after explicit human confirmation |
+| **Agent with tools** | `agent.py` defines an AzureOpenAI function-calling agent wired to 6 tools (`search_assets`, `get_high_risk_assets`, `get_underused_assets`, `schedule_maintenance`, `reallocate_asset`, `search_policy_docs`) that interact with real data and the RAG index |
+| **Retrieval-Augmented Generation (RAG)** | Four policy Markdown documents in `/docs` are indexed in Azure AI Search (`policy-index`, 7 chunks); `search_policy_docs` retrieves and cites policy text in agent responses |
+| **Responsible AI — Human oversight** | Every proposed action is presented as an Approve / Reject card in the Chat tab; `execute_action()` only writes to the database after explicit human confirmation |
 | **Responsible AI — Transparency** | Every risk score is accompanied by a plain-English reason string listing exactly which thresholds were breached |
 | **Responsible AI — Reliability** | `schedule_maintenance` and `reallocate_asset` validate all inputs; `execute_action` re-validates before writing, so a stale or tampered proposal is rejected |
 | **Knowledge grounding** | Risk thresholds in `scoring.py` are derived from the policy documents; the code constants and doc tables use the same numbers |
-| **Content filters** | Azure AI Content Filters (in progress) will screen all agent inputs and outputs |
+| **Content filters** | Azure AI Content Filters are enabled on the deployed model endpoint and screen all agent inputs and outputs |
 
 ---
 
@@ -197,10 +192,12 @@ Assets with status **Under Repair** or **Decommissioned** are never flagged unde
 asset-rescue-agent/
 │
 ├── app.py                  # Streamlit dashboard — all UI (Dashboard + Chat tabs)
+├── agent.py                # Azure AI Foundry agent — 6 tools, run_agent() entry point
 ├── scoring.py              # Risk score, underuse flag, plain-English reason per asset
-├── tools.py                # Five validated agent tools + smoke test
+├── tools.py                # Six validated agent tools + execute_action + smoke test
 ├── db.py                   # SQLite setup, CSV loader, actions_log management
 ├── make_data.py            # Generates 150 synthetic asset rows → data/assets.csv
+├── index_docs.py           # Indexes /docs/*.md into Azure AI Search (run once)
 │
 ├── data/
 │   ├── assets.csv          # Generated dataset (git-ignored)
@@ -218,6 +215,7 @@ asset-rescue-agent/
 ├── .env.example            # Template for environment variables (copy to .env)
 ├── .gitignore              # Ignores .env, venv/, *.db, __pycache__/
 ├── requirements.txt        # Pinned Python dependencies
+├── TESTS.md                # Full agent and integration test results
 └── README.md               # This file
 ```
 
@@ -270,9 +268,13 @@ streamlit run app.py
 
 | Variable | Description |
 |----------|-------------|
-| `AZURE_OPENAI_ENDPOINT` | Your Azure OpenAI resource endpoint URL |
-| `AZURE_OPENAI_KEY` | Your Azure OpenAI API key |
-| `AZURE_OPENAI_DEPLOYMENT` | Deployment name of your chat model (e.g. `gpt-4o`) |
+| `AZURE_FOUNDRY_ENDPOINT` | Azure AI Foundry / Azure OpenAI resource endpoint URL |
+| `AZURE_FOUNDRY_KEY` | Azure OpenAI API key |
+| `AZURE_CHAT_DEPLOYMENT` | Deployment name of your chat model (e.g. `gpt-4.1-mini`) |
+| `AZURE_EMBEDDING_DEPLOYMENT` | Deployment name of your embedding model (e.g. `text-embedding-ada-002`) |
+| `AZURE_SEARCH_ENDPOINT` | Azure AI Search service endpoint URL |
+| `AZURE_SEARCH_KEY` | Azure AI Search admin key |
+| `AZURE_SEARCH_INDEX` | Name of the search index (e.g. `policy-index`) |
 | `DB_PATH` | Path to the SQLite database file (default: `data/assets.db`) |
 | `DATA_PATH` | Path to the generated CSV file (default: `data/assets.csv`) |
 
@@ -284,15 +286,15 @@ streamlit run app.py
 
 1. **Filter assets** — Use the sidebar to narrow down by Department, Asset Type or Status. All KPI cards, the risk table, and all four charts update immediately.
 2. **Identify high-risk assets** — The "Action Needed" section at the top of the Dashboard tab shows the five highest-risk in-service assets, each with a one-line reason and a suggested action (schedule maintenance, consider replacement, etc.).
-3. **Ask a policy question** *(in progress)* — Switch to the Chat tab, click "What does the maintenance policy say?", and the agent will retrieve the relevant section from the indexed policy documents and reply with a citation.
-4. **Approve an action** *(in progress)* — The agent proposes a maintenance or reallocation action as an Approve / Reject card. Click Approve to commit the change; the asset record and actions log are updated immediately.
+3. **Ask a policy question** — Switch to the Chat tab, click "What does the maintenance policy say?", and the agent will retrieve the relevant section from the indexed policy documents and reply with a citation.
+4. **Approve an action** — The agent proposes a maintenance or reallocation action as an Approve / Reject card. Click Approve to commit the change; the asset record and actions log are updated immediately.
 5. **See the dashboard update** — Click "Refresh all data" on the Dashboard tab (or wait up to 60 seconds for the automatic cache refresh) to see updated scores and KPI counts.
 
 ---
 
 ## Testing and Results
 
-> **TESTS.md does not exist yet.** The table below includes the validation test cases confirmed by the `tools.py` smoke test. Fill in the agent and RAG test cases once those components are connected.
+Full test output is in **[TESTS.md](TESTS.md)**.
 
 ### Validation Tests (tools.py) — all confirmed ✅
 
@@ -316,15 +318,24 @@ streamlit run app.py
 | High-risk count (≥ 60, in-service only) | 15–20% of 125 | 12 assets (9.6%) | ✅ Pass |
 | Underused count (Active/Idle only) | 10–16% of 110 | 18 assets (16.4%) | ✅ Pass |
 
-### Agent & RAG Tests — in progress
+### Agent & RAG Tests — 10/10 PASS ✅
 
-| Test Prompt | Expected Result | Actual Result | Pass? |
-|-------------|----------------|---------------|-------|
-| "Which assets need repair?" | List of high-risk assets with reasons | TODO | TODO |
-| "Show underused laptops" | Filtered list of Idle/Active laptops below usage threshold | TODO | TODO |
-| "What does the maintenance policy say about 548 days?" | Cited answer from maintenance_policy.md | TODO | TODO |
-| "Reallocate ASSET-0004 to Physics" | Approve/Reject proposal card | TODO | TODO |
-| "Schedule maintenance for ASSET-0009" | Approve/Reject proposal card | TODO | TODO |
+The table below proves three things: (1) the agent never executes actions on its own — it always returns a PROPOSAL that requires human approval before any write happens; (2) it correctly rejects invalid requests, including non-existent assets, Decommissioned assets, Under Repair assets, and same-department reallocations, relaying the exact tool error rather than proceeding; and (3) policy answers are grounded in the real indexed documents — the agent cites the source file rather than inventing content. `actions_log` ended at exactly 1 row (from the single approved action in prompt 10).
+
+| # | Prompt | Tool(s) called | P/F | Notes |
+|---|--------|----------------|-----|-------|
+| 1 | Which assets need repair? | get_high_risk_assets | PASS | 13 real high-risk assets listed |
+| 2 | Show underused laptops | get_underused_assets | PASS | search_assets never called; 4 real underused laptops returned |
+| 3 | Maintenance policy intervals | search_policy_docs | PASS | Cited (Source: maintenance_policy.md) |
+| 4 | Allocation policy for reassigning | search_policy_docs | PASS | Cited allocation_policy.md with full reallocation rules |
+| 5 | Schedule maintenance for ASSET-9999 | schedule_maintenance | PASS | "Asset not found" — no proposal, no DB write |
+| 6 | Schedule maintenance for ASSET-0002 (Decommissioned) | schedule_maintenance | PASS | "Cannot be scheduled — Decommissioned" — no proposal |
+| 7 | Reallocate ASSET-0009 (Under Repair) to Biology | reallocate_asset | PASS | "Under Repair — blocked until cleared by IT" — no proposal |
+| 8 | Reallocate ASSET-0001 to Chemistry (its own dept) | reallocate_asset | PASS | "Already assigned to Chemistry — target must differ" |
+| 9 | Schedule maintenance for ASSET-0001 (valid) | schedule_maintenance | PASS | Real PROPOSAL returned; actions_log still 0 after proposal alone |
+| 10 | Approve proposal from step 9 | execute_action() | PASS | success: true; actions_log → 1 |
+
+**Final result: 10/10 PASS — `actions_log` ended at exactly 1 row.**
 
 ---
 
@@ -338,7 +349,7 @@ streamlit run app.py
 | **Transparency** | Every risk score is accompanied by a plain-English `reason` string that cites exactly which thresholds were breached (e.g., "No maintenance in 954 days (critical threshold: 548 days)"). The Dashboard shows the full reason on demand. |
 | **Reliability** | Both proposal functions (`schedule_maintenance`, `reallocate_asset`) validate inputs and return structured error dicts. `execute_action` re-validates before any database write, so a stale or tampered proposal is rejected. |
 | **Human oversight** | No database change is made without an explicit human decision. The Approve / Reject card pattern (implemented in the Chat tab UI, pending agent connection) ensures a person reviews every proposed action before it is committed. |
-| **Content filters** | Azure AI Content Filters will be enabled on the deployed model endpoint to screen agent inputs and outputs. *(In progress.)* |
+| **Content filters** | Azure AI Content Filters are enabled on the deployed model endpoint and screen all agent inputs and outputs. |
 
 ---
 
@@ -347,7 +358,6 @@ streamlit run app.py
 - **Synthetic data only.** The 150 asset records are generated by `make_data.py` with `random.seed(42)`. The system has not been tested against real inventory data.
 - **Rule-based scoring, not trained ML.** The risk score is a deterministic formula with manually chosen thresholds. It does not learn from historical outcomes or actual failure rates.
 - **Single-user SQLite.** The database does not support concurrent writes. In a multi-user environment this would need to be replaced with a server-based database (e.g., PostgreSQL).
-- **Azure AI agent not connected.** The Chat tab UI is complete, but the Azure AI Foundry agent, the RAG index, and the tool-calling loop are not yet wired up. The natural-language features shown in the walkthrough are not functional in the current version.
 - **No authentication.** The Streamlit app has no login mechanism. Anyone with network access to the running server can view and interact with the dashboard.
 - **Fixed reference date.** `scoring.py` and `make_data.py` use a hard-coded date of 20 Sep 2026 so that scores remain deterministic across runs. A production system would use `date.today()`.
 
@@ -355,8 +365,8 @@ streamlit run app.py
 
 ## Future Improvements
 
-1. **Connect the Azure AI Foundry agent** — wire up the tool-calling loop, enable the Chat tab, and connect the Approve / Reject buttons to `execute_action()`.
-2. **Build and deploy the RAG index** — upload the four policy documents to Azure AI Search and integrate retrieval into the agent's response chain.
+1. ~~**Connect the Azure AI Foundry agent** — wire up the tool-calling loop, enable the Chat tab, and connect the Approve / Reject buttons to `execute_action()`.~~ ✅ Done.
+2. ~~**Build and deploy the RAG index** — upload the four policy documents to Azure AI Search and integrate retrieval into the agent's response chain.~~ ✅ Done — `policy-index` created, 7 chunks indexed.
 3. **Replace rule-based scoring with a trained classifier** — use historical maintenance and failure records to train a model that improves its predictions over time.
 4. **Add user authentication** — integrate Azure Entra ID (formerly Azure AD) so only authorised IT staff can access the dashboard and approve actions.
 5. **Swap SQLite for a cloud database** — migrate to Azure SQL or Cosmos DB to support multiple concurrent users and retain the full actions log across deployments.
@@ -377,10 +387,10 @@ streamlit run app.py
 
 ### Azure Services
 
-- [Azure AI Foundry Agent Service](https://learn.microsoft.com/azure/ai-studio/) *(planned)*
-- [Azure OpenAI Service](https://azure.microsoft.com/products/ai-services/openai-service/) *(planned)*
-- [Azure AI Search](https://azure.microsoft.com/products/ai-services/ai-search/) *(planned)*
-- [Azure AI Content Safety](https://azure.microsoft.com/products/ai-services/ai-content-safety/) *(planned)*
+- [Azure AI Foundry Agent Service](https://learn.microsoft.com/azure/ai-studio/)
+- [Azure OpenAI Service](https://azure.microsoft.com/products/ai-services/openai-service/)
+- [Azure AI Search](https://azure.microsoft.com/products/ai-services/ai-search/)
+- [Azure AI Content Safety](https://azure.microsoft.com/products/ai-services/ai-content-safety/)
 
 ### Dataset
 
@@ -392,4 +402,4 @@ This project was developed with assistance from **Kiro** (an AI-powered developm
 
 ---
 
-*Last updated: 20 September 2026*
+*Last updated: 22 September 2026*
