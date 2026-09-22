@@ -6,6 +6,7 @@ Functions
 ─────────
 search_assets(query)                          – full-text search
 get_high_risk_assets(threshold)               – scored assets above threshold
+get_underused_assets(asset_type)              – underuse-flagged assets, optional type filter
 schedule_maintenance(asset_id)                – propose maintenance (validated)
 reallocate_asset(asset_id, new_dept, loc)     – propose reallocation (validated)
 execute_action(action_dict)                   – commit a PROPOSED action to DB
@@ -67,7 +68,36 @@ def search_assets(query: str) -> pd.DataFrame:
     return df[mask].reset_index(drop=True)
 
 
-# ── 2. get_high_risk_assets ───────────────────────────────────────────────────
+# ── 2. get_underused_assets ───────────────────────────────────────────────────
+def get_underused_assets(asset_type: str | None = None) -> pd.DataFrame:
+    """
+    Returns assets flagged as underused (underuse == True) by scoring.py.
+    Only Active and Idle assets can be underused (scoring.py enforces this).
+
+    If asset_type is provided (e.g. "laptop" or "laptops"), further filters
+    to assets whose type matches case-insensitively, handling singular/plural
+    by stripping a trailing 's' from both sides before comparing.
+
+    Returns the same column shape as get_high_risk_assets for consistency:
+        id, type, dept, status, repair_risk, usage_hours, reason
+    Returns an empty DataFrame (not an error) when nothing matches.
+    """
+    scored = score_assets()
+    result = scored[scored["underuse"] == True].reset_index(drop=True)
+
+    if asset_type:
+        # Normalise both sides: lowercase + strip trailing 's' for plural safety
+        # e.g. "laptops" → "laptop", "Laptop" → "laptop"
+        normalise = lambda s: s.lower().rstrip("s")
+        needle = normalise(asset_type)
+        result = result[
+            result["type"].apply(lambda t: normalise(t) == needle)
+        ].reset_index(drop=True)
+
+    return result
+
+
+# ── 3. get_high_risk_assets ───────────────────────────────────────────────────
 def get_high_risk_assets(threshold: int = 60) -> pd.DataFrame:
     """
     Returns non-Decommissioned assets with repair_risk >= threshold,
@@ -84,7 +114,7 @@ def get_high_risk_assets(threshold: int = 60) -> pd.DataFrame:
     )
 
 
-# ── 3. schedule_maintenance ───────────────────────────────────────────────────
+# ── 4. schedule_maintenance ───────────────────────────────────────────────────
 def schedule_maintenance(asset_id: str) -> dict:
     """
     Validates and PROPOSES a maintenance action.
@@ -122,7 +152,7 @@ def schedule_maintenance(asset_id: str) -> dict:
     }
 
 
-# ── 4. reallocate_asset ───────────────────────────────────────────────────────
+# ── 5. reallocate_asset ───────────────────────────────────────────────────────
 def reallocate_asset(asset_id: str, new_dept: str, new_location: str) -> dict:
     """
     Validates and PROPOSES a reallocation action.
@@ -174,7 +204,7 @@ def reallocate_asset(asset_id: str, new_dept: str, new_location: str) -> dict:
     }
 
 
-# ── 5. execute_action ─────────────────────────────────────────────────────────
+# ── 6. execute_action ─────────────────────────────────────────────────────────
 def execute_action(action: dict, performed_by: str = "agent") -> dict:
     """
     Commits an approved PROPOSED action to the database and logs it.

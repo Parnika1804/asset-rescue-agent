@@ -33,10 +33,11 @@ from azure.core.credentials import AzureKeyCredential
 from azure.search.documents import SearchClient
 from azure.search.documents.models import VectorizedQuery
 
-# ── import the four existing tools (no execute_action) ────────────────────────
+# ── import the five existing tools (no execute_action) ───────────────────────
 from tools import (
     search_assets,
     get_high_risk_assets,
+    get_underused_assets,
     schedule_maintenance,
     reallocate_asset,
 )
@@ -75,7 +76,11 @@ SYSTEM_PROMPT = (
     "When a tool returns an error field, relay that error clearly to the user "
     "instead of proceeding. "
     "When answering policy questions, always cite the source_file from "
-    "search_policy_docs results — do not invent policy content."
+    "search_policy_docs results — do not invent policy content. "
+    "When the user asks about 'underused', 'idle', 'low utilization', or "
+    "'underutilized' assets, always call get_underused_assets — never "
+    "search_assets — even if they also mention a specific type like 'laptops'. "
+    "Pass the type as the asset_type argument."
 )
 
 # ── tool schemas (OpenAI function-calling format) ─────────────────────────────
@@ -197,6 +202,33 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_underused_assets",
+            "description": (
+                "Return assets that are flagged as underused (low utilization / idle). "
+                "Only Active and Idle assets can be underused. "
+                "Use this tool — not search_assets — whenever the user asks about "
+                "'underused', 'idle', 'low utilization', or 'underutilized' assets. "
+                "Optionally filter by asset type (e.g. 'laptop'). "
+                "Returns an empty list when no underused assets match."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "asset_type": {
+                        "type": "string",
+                        "description": (
+                            "Optional asset type to filter by, e.g. 'laptop' or 'laptops'. "
+                            "Omit to return all underused assets regardless of type."
+                        ),
+                    }
+                },
+                "required": [],
+            },
+        },
+    },
 ]
 
 
@@ -276,6 +308,11 @@ def dispatch_tool(name: str, args: dict) -> str:
 
     elif name == "search_policy_docs":
         return search_policy_docs(args["query"])
+
+    elif name == "get_underused_assets":
+        asset_type = args.get("asset_type")   # optional — may be None
+        result = get_underused_assets(asset_type)
+        return df_to_json(result)
 
     else:
         return json.dumps({"error": f"Unknown tool: '{name}'"})

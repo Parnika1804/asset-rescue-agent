@@ -15,6 +15,8 @@ import streamlit as st
 
 from db import get_connection
 from scoring import score_assets
+from agent import run_agent
+from tools import execute_action
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PAGE CONFIG  (must be first Streamlit call)
@@ -166,8 +168,8 @@ and take timely action.
   reason broken down by maintenance history, failures, and age.
 - **Every action requires human approval** — the agent proposes;
   a person reviews and confirms before any change is written to the database.
-- **No Azure AI is connected yet** — the Chat tab is a preview of
-  the natural-language interface coming in the next phase.
+- **Powered by Azure AI Foundry + Azure AI Search (RAG)** — the Chat tab uses
+  GPT-4.1-mini with function calling and vector search over the policy docs.
 """)
 
 
@@ -496,19 +498,20 @@ with tab_dash:
 # ╚═══════════════════════════════════════════════════════════════════════════╝
 with tab_chat:
     st.title("💬 AI Agent Chat")
+    st.caption("Powered by Azure AI Foundry + Azure AI Search (RAG)")
 
-    # ── connection notice ─────────────────────────────────────────────────────
-    st.warning(
-        "🔌 **Agent not connected yet.**  "
-        "Azure OpenAI credentials have not been configured. "
-        "The chat interface below is a preview — example questions and the "
-        "Approve / Reject card are fully designed and ready to wire up.",
-        icon="⚠️",
-    )
+    # ── session state init ────────────────────────────────────────────────────
+    if "messages" not in st.session_state:
+        st.session_state["messages"] = []          # [{role, content}, ...]
+    if "pending_proposal" not in st.session_state:
+        st.session_state["pending_proposal"] = None  # proposal dict or None
+    if "example_q" not in st.session_state:
+        st.session_state["example_q"] = ""
 
-    # ── welcome message ───────────────────────────────────────────────────────
-    with st.container(border=True):
-        st.markdown("""
+    # ── welcome message (only before first exchange) ──────────────────────────
+    if not st.session_state["messages"]:
+        with st.container(border=True):
+            st.markdown("""
 ### 👋 Welcome to the Asset Rescue Agent
 
 I can help you:
@@ -526,78 +529,159 @@ anything is written to the database. You stay in control at every step.
     eq1, eq2 = st.columns(2)
     eq3, eq4 = st.columns(2)
 
-    # Store clicked example in session state so the chat input can pick it up
-    if "example_q" not in st.session_state:
-        st.session_state["example_q"] = ""
-
     with eq1:
         if st.button("🔴 Which assets need repair?",
                      use_container_width=True, key="eq1"):
             st.session_state["example_q"] = "Which assets need repair?"
+            st.rerun()
     with eq2:
         if st.button("💤 Show underused laptops",
                      use_container_width=True, key="eq2"):
             st.session_state["example_q"] = "Show underused laptops"
+            st.rerun()
     with eq3:
         if st.button("📋 What does the maintenance policy say?",
                      use_container_width=True, key="eq3"):
             st.session_state["example_q"] = "What does the maintenance policy say?"
+            st.rerun()
     with eq4:
         if st.button("🔀 Reallocate an underused asset",
                      use_container_width=True, key="eq4"):
             st.session_state["example_q"] = "Reallocate an underused asset"
-
-    # If an example was clicked, show it as a "sent" message and a stub reply
-    if st.session_state["example_q"]:
-        q = st.session_state["example_q"]
-        with st.chat_message("user"):
-            st.write(q)
-        with st.chat_message("assistant"):
-            st.info(
-                "🔌 The agent isn't connected yet — this is where the response "
-                "from Azure OpenAI would appear, followed by an Approve / Reject "
-                "card if an action is proposed.",
-                icon="🤖",
-            )
-
-    # ── chat input ────────────────────────────────────────────────────────────
-    user_input = st.chat_input(
-        "Ask about your assets…",
-        disabled=True,
-        key="chat_input",
-    )
+            st.rerun()
 
     st.divider()
 
-    # ── mock Approve / Reject card ────────────────────────────────────────────
-    st.markdown("#### 🗂️ Example: Approve / Reject Action Card")
-    st.caption(
-        "When the agent proposes an action this card will appear. "
-        "No change is made until you click Approve."
-    )
+    # ── render existing conversation ──────────────────────────────────────────
+    for msg in st.session_state["messages"]:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
 
-    with st.container(border=True):
-        st.markdown("""
-**Proposed Action: Schedule Maintenance**
+    # ── pending Approve / Reject card (shown below the last message) ──────────
+    if st.session_state["pending_proposal"] is not None:
+        proposal = st.session_state["pending_proposal"]
+        action_type = proposal.get("action_type", "")
+        action_label = action_type.replace("_", " ").title()
 
+        with st.container(border=True):
+            st.markdown(f"**🗂️ Proposed Action: {action_label}**")
+
+            if action_type == "schedule_maintenance":
+                st.markdown(f"""
 | Field | Value |
 |---|---|
-| Asset ID | ASSET-0009 |
-| Type | Oscilloscope |
-| Department | Physics |
-| Location | Building D - Office 3 |
-| Proposed date | 2026-09-20 |
-| Last maintained | 2024-02-09 |
-| Risk score | **85 / 100** 🔴 Critical |
-| Reason | No maintenance in 954 days. High failure count: 4 failures. Age 6.1 yrs. |
+| Asset ID | {proposal.get('asset_id', '—')} |
+| Type | {proposal.get('asset_type', '—')} |
+| Department | {proposal.get('dept', '—')} |
+| Location | {proposal.get('location', '—')} |
+| Proposed date | {proposal.get('proposed_maintenance_date', '—')} |
+| Last maintained | {proposal.get('current_last_maintenance', '—')} |
 """)
-        col_approve, col_reject, _ = st.columns([1, 1, 3])
-        with col_approve:
-            st.button("✅ Approve", type="primary",
-                      disabled=True, key="mock_approve",
-                      help="Disabled — agent not connected yet")
-        with col_reject:
-            st.button("❌ Reject",
-                      disabled=True, key="mock_reject",
-                      help="Disabled — agent not connected yet")
-        st.caption("_Buttons are disabled until the Azure OpenAI agent is connected._")
+            elif action_type == "reallocate_asset":
+                st.markdown(f"""
+| Field | Value |
+|---|---|
+| Asset ID | {proposal.get('asset_id', '—')} |
+| Type | {proposal.get('asset_type', '—')} |
+| From department | {proposal.get('from_dept', '—')} |
+| From location | {proposal.get('from_location', '—')} |
+| To department | {proposal.get('to_dept', '—')} |
+| To location | {proposal.get('to_location', '—')} |
+""")
+            else:
+                st.json(proposal)
+
+            st.caption("No change is made until you click **Approve**.")
+            col_approve, col_reject, _ = st.columns([1, 1, 3])
+
+            with col_approve:
+                if st.button("✅ Approve", type="primary", key="approve_btn"):
+                    result = execute_action(proposal, performed_by="chat_user")
+                    if result.get("success"):
+                        approved_msg = (
+                            f"✅ **Action approved and committed.** "
+                            f"`{proposal.get('action_type')}` on "
+                            f"`{proposal.get('asset_id')}` has been recorded."
+                        )
+                        st.session_state["messages"].append(
+                            {"role": "assistant", "content": approved_msg}
+                        )
+                    else:
+                        err_msg = (
+                            f"⚠️ **Approval failed:** {result.get('error', 'Unknown error.')}"
+                        )
+                        st.session_state["messages"].append(
+                            {"role": "assistant", "content": err_msg}
+                        )
+                    st.session_state["pending_proposal"] = None
+                    st.cache_data.clear()   # force dashboard KPIs/charts to refresh
+                    st.rerun()
+
+            with col_reject:
+                if st.button("❌ Reject", key="reject_btn"):
+                    st.session_state["messages"].append(
+                        {"role": "assistant",
+                         "content": "🚫 **Proposal rejected.** No changes were made."}
+                    )
+                    st.session_state["pending_proposal"] = None
+                    st.rerun()
+
+    # ── chat input (and example-button injection) ─────────────────────────────
+    # Consume a queued example-button click as if the user typed it
+    prefill = st.session_state.pop("example_q", "") if st.session_state.get("example_q") else ""
+
+    user_input = st.chat_input("Ask about your assets…", key="chat_input")
+
+    # Prefer typed input; fall back to example-button prefill
+    raw_input = user_input or prefill or ""
+
+    if raw_input:
+        # 1. Add user message to history and render it immediately
+        st.session_state["messages"].append({"role": "user", "content": raw_input})
+        with st.chat_message("user"):
+            st.markdown(raw_input)
+
+        # 2. Call the agent
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking…"):
+                result = run_agent(raw_input)
+
+            agent_text = result["response"]
+            st.markdown(agent_text)
+
+        # 3. Persist assistant reply
+        st.session_state["messages"].append(
+            {"role": "assistant", "content": agent_text}
+        )
+
+        # 4. Check tool calls for a proposal (schedule_maintenance / reallocate_asset)
+        new_proposal = None
+        for tc in result.get("tool_calls", []):
+            if tc["name"] in ("schedule_maintenance", "reallocate_asset"):
+                # result_preview is truncated; re-parse via the full result stored
+                # in tc — run_agent only stores a preview, so we re-call the tool
+                # to get the full dict.  Actually we can parse the preview safely:
+                # proposals are small JSON. Use the preview but strip the ellipsis.
+                raw = tc["result_preview"].rstrip("…").rstrip("…")
+                try:
+                    proposal_dict = json.loads(raw)
+                except json.JSONDecodeError:
+                    # preview was truncated — re-call the tool for the full result
+                    from tools import schedule_maintenance, reallocate_asset
+                    if tc["name"] == "schedule_maintenance":
+                        proposal_dict = schedule_maintenance(tc["args"].get("asset_id", ""))
+                    else:
+                        proposal_dict = reallocate_asset(
+                            tc["args"].get("asset_id", ""),
+                            tc["args"].get("to_dept", ""),
+                            tc["args"].get("to_location", ""),
+                        )
+                # Only surface real proposals, not errors
+                if isinstance(proposal_dict, dict) and "error" not in proposal_dict:
+                    new_proposal = proposal_dict
+                    break   # show one card at a time
+
+        if new_proposal:
+            st.session_state["pending_proposal"] = new_proposal
+        
+        st.rerun()
