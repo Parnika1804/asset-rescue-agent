@@ -45,6 +45,13 @@ def create_tables(conn: sqlite3.Connection):
             details      TEXT,
             performed_by TEXT    DEFAULT 'system'
         );
+
+        CREATE TABLE IF NOT EXISTS users (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            username      TEXT    UNIQUE NOT NULL,
+            password_hash TEXT    NOT NULL,
+            created_at    TEXT    DEFAULT (datetime('now','localtime'))
+        );
     """)
     conn.commit()
     print("✅  Tables ready.")
